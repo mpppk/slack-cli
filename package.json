@@ -2,7 +2,9 @@
 	"name": "slack-cli",
 	"module": "index.ts",
 	"type": "module",
-	"private": true,
+	"bin": {
+		"slack-cli": "./index.ts"
+	},
 	"scripts": {
 		"start": "bun index.ts",
 		"type-check": "bunx tsc --noEmit",

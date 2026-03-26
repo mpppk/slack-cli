@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 // slack_search.ts
 //
 // Usage:
