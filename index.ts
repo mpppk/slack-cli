@@ -583,7 +583,196 @@ async function main(): Promise<void> {
 	}
 }
 
-main().catch((error: unknown) => {
+// ─── OAuth auth command ──────────────────────────────────────────────────────
+
+type OAuthV2AccessResponse = {
+	ok: boolean;
+	authed_user?: {
+		access_token?: string;
+	};
+	error?: string;
+};
+
+async function exchangeCode(
+	clientId: string,
+	clientSecret: string,
+	code: string,
+	redirectUri: string,
+): Promise<string> {
+	const resp = await fetch("https://slack.com/api/oauth.v2.access", {
+		method: "POST",
+		headers: { "Content-Type": "application/x-www-form-urlencoded" },
+		body: new URLSearchParams({
+			client_id: clientId,
+			client_secret: clientSecret,
+			code,
+			redirect_uri: redirectUri,
+		}),
+	});
+
+	const data = (await resp.json()) as OAuthV2AccessResponse;
+	if (!data.ok || !data.authed_user?.access_token) {
+		throw new Error(`Token exchange failed: ${data.error ?? "unknown_error"}`);
+	}
+	return data.authed_user.access_token;
+}
+
+async function runAuth(manual: boolean): Promise<void> {
+	const clientId = process.env.SLACK_CLIENT_ID;
+	const clientSecret = process.env.SLACK_CLIENT_SECRET;
+	if (!clientId || !clientSecret) {
+		throw new Error("SLACK_CLIENT_ID and SLACK_CLIENT_SECRET must be set");
+	}
+
+	const userScopes = [
+		"search:read",
+		"search:read.public",
+		"channels:history",
+		"channels:read",
+		"groups:history",
+		"groups:read",
+		"im:history",
+		"im:read",
+		"mpim:history",
+		"mpim:read",
+	].join(",");
+
+	// State token for CSRF protection
+	const state = crypto.randomUUID();
+
+	if (manual) {
+		// --manual: no local server.
+		// Register https://localhost/callback in Slack App Redirect URLs,
+		// then paste the redirect URL from the browser address bar.
+		const redirectUri = "https://localhost/callback";
+
+		const authUrl = new URL("https://slack.com/oauth/v2/authorize");
+		authUrl.searchParams.set("client_id", clientId);
+		authUrl.searchParams.set("user_scope", userScopes);
+		authUrl.searchParams.set("redirect_uri", redirectUri);
+		authUrl.searchParams.set("state", state);
+
+		console.log("1. Slack App の Redirect URLs に以下を登録してください:");
+		console.log(`   ${redirectUri}\n`);
+		console.log("2. 以下のURLをブラウザで開いて認証してください:");
+		console.log(`   ${authUrl.toString()}\n`);
+		console.log("3. 認証後にブラウザが接続エラーを表示します。");
+		console.log(
+			"   アドレスバーの URL (https://localhost/callback?code=...) をコピーして貼り付けてください:",
+		);
+
+		const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
+		await Bun.$`${openCmd} ${authUrl.toString()}`.quiet().nothrow();
+
+		const line = await new Promise<string>((resolve) => {
+			process.stdin.once("data", (buf) => resolve(buf.toString().trim()));
+		});
+
+		let code: string | null = null;
+		let returnedState: string | null = null;
+		try {
+			const pasted = new URL(line);
+			code = pasted.searchParams.get("code");
+			returnedState = pasted.searchParams.get("state");
+		} catch {
+			// User pasted only the code value
+			code = line;
+		}
+
+		if (returnedState && returnedState !== state) {
+			throw new Error("State mismatch (CSRF protection)");
+		}
+		if (!code) {
+			throw new Error("No code found in pasted value");
+		}
+
+		const token = await exchangeCode(clientId, clientSecret, code, redirectUri);
+		console.log(`\nSLACK_USER_TOKEN=${token}`);
+	} else {
+		// Default: start local HTTP server on localhost:3000
+		const port = 3000;
+		const redirectUri = `http://localhost:${port}/callback`;
+
+		const authUrl = new URL("https://slack.com/oauth/v2/authorize");
+		authUrl.searchParams.set("client_id", clientId);
+		authUrl.searchParams.set("user_scope", userScopes);
+		authUrl.searchParams.set("redirect_uri", redirectUri);
+		authUrl.searchParams.set("state", state);
+
+		let resolveToken!: (token: string) => void;
+		let rejectToken!: (err: Error) => void;
+		const tokenPromise = new Promise<string>((resolve, reject) => {
+			resolveToken = resolve;
+			rejectToken = reject;
+		});
+
+		const server = Bun.serve({
+			port,
+			fetch(req) {
+				const url = new URL(req.url);
+				if (url.pathname !== "/callback") {
+					return new Response("Not found", { status: 404 });
+				}
+
+				const oauthError = url.searchParams.get("error");
+				if (oauthError) {
+					rejectToken(new Error(`OAuth error: ${oauthError}`));
+					return new Response(`Error: ${oauthError}`, { status: 400 });
+				}
+
+				const returnedState = url.searchParams.get("state");
+				if (returnedState !== state) {
+					rejectToken(new Error("State mismatch (CSRF protection)"));
+					return new Response("State mismatch", { status: 400 });
+				}
+
+				const code = url.searchParams.get("code");
+				if (!code) {
+					rejectToken(new Error("No code received"));
+					return new Response("No code", { status: 400 });
+				}
+
+				exchangeCode(clientId, clientSecret, code, redirectUri)
+					.then(resolveToken)
+					.catch(rejectToken);
+
+				return new Response(
+					"<html><body><h1>認証完了!</h1><p>ターミナルでトークンを確認してください。このウィンドウは閉じて構いません。</p></body></html>",
+					{ headers: { "content-type": "text/html; charset=utf-8" } },
+				);
+			},
+		});
+
+		console.log("Slack App の Redirect URLs に以下を登録してください:");
+		console.log(`  ${redirectUri}\n`);
+		console.log("ブラウザでSlackの認証ページを開きます...");
+		console.log(`URL: ${authUrl.toString()}\n`);
+
+		const openCmd = process.platform === "darwin" ? "open" : "xdg-open";
+		await Bun.$`${openCmd} ${authUrl.toString()}`.quiet().nothrow();
+
+		try {
+			const token = await tokenPromise;
+			console.log(`\nSLACK_USER_TOKEN=${token}`);
+		} finally {
+			server.stop();
+		}
+	}
+}
+
+// ─── Entry point ─────────────────────────────────────────────────────────────
+
+async function run(): Promise<void> {
+	const subcommand = process.argv[2];
+	if (subcommand === "auth") {
+		const manual = process.argv.includes("--manual");
+		await runAuth(manual);
+	} else {
+		await main();
+	}
+}
+
+run().catch((error: unknown) => {
 	if (typeof error === "object" && error !== null && "code" in error) {
 		const e = error as {
 			code?: string;
