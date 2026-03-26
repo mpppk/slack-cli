@@ -1,0 +1,23 @@
+{
+	"name": "slack-cli",
+	"module": "index.ts",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"start": "bun index.ts",
+		"type-check": "bunx tsc --noEmit",
+		"format": "bunx biome format --write .",
+		"lint": "bunx biome lint --write .",
+		"check": "bunx biome check --write ."
+	},
+	"dependencies": {
+		"@slack/web-api": "^7"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "latest",
+		"@types/bun": "latest"
+	},
+	"peerDependencies": {
+		"typescript": "^5"
+	}
+}

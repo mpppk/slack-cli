@@ -1,0 +1,40 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "bun install",
+			"type": "shell",
+			"command": "bun install",
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "type-check",
+			"type": "shell",
+			"command": "bun run type-check",
+			"problemMatcher": ["$tsc"],
+			"group": "build"
+		},
+		{
+			"label": "biome check",
+			"type": "shell",
+			"command": "bun run check",
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "biome check 2",
+			"type": "shell",
+			"command": "bun run check",
+			"problemMatcher": [],
+			"group": "build"
+		},
+		{
+			"label": "biome check final",
+			"type": "shell",
+			"command": "bun run check",
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}
